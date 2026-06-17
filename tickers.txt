@@ -1,0 +1,4 @@
+# TICKERS FOR WATCHING -- One ticker per line.
+AAPL
+MSFT
+NVDA

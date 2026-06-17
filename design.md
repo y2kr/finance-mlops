@@ -106,6 +106,37 @@ a light lean — but these are yours to settle.
   or start fresh and accumulate? *Lean: a modest backfill so you can train on day
   one, then accumulate.*
 
+#### Settled (2026-06-17)
+
+| Decision | Resolution |
+|---|---|
+| **Ticker universe** | Small hand-curated `tickers.txt`, one symbol/line, `#` comments. No DB table for the watchlist. |
+| **Source** | **RSS-only** (per-ticker Yahoo / Google News feeds). No API keys/accounts. Finnhub is a documented future swap-in (for summaries/backfill) — not built now. |
+| **Cold start** | Day-one model trains on **public corpora** (Financial PhraseBank/FiQA, Stage 2). Live RSS accumulates for drift + retraining. |
+| **Pull mode** | **Polling** (RSS forces it). **Hourly**, via plain cron / sleep-loop now; Dagster takes over at Stage 6 without touching ingest code. |
+| **Row grain** | **One row per (article × ticker)**. Same story in two feeds = two rows. Matches per-ticker sentiment grain; no arrays/join table. |
+| **Dedup** | `UNIQUE dedup_key = sha256(ticker + normalized_title)`, `ON CONFLICT DO NOTHING`. Robust to Google News URL noise. Cross-outlet fuzzy dedup deferred. |
+| **Storage** | Postgres `news` table (below). `summary`/`url`/`published_at` nullable. Parsed columns only — no raw payload (accepted risk: a parser bug loses unre-fetchable data; mitigate by log+skip on malformed entries, never insert garbage). `CREATE TABLE IF NOT EXISTS`, no migrations yet. Predictions = separate table later. |
+
+```sql
+CREATE TABLE IF NOT EXISTS news (
+    id           bigserial PRIMARY KEY,
+    dedup_key    text NOT NULL UNIQUE,        -- sha256(ticker + normalized_title)
+    ticker       text NOT NULL,               -- watchlist symbol from the feed
+    source       text,                        -- outlet, e.g. "Reuters" (from RSS)
+    headline     text NOT NULL,
+    summary      text,                        -- RSS <description>, often empty
+    url          text,                        -- raw, for clicking (NOT the dedup key)
+    published_at timestamptz,                 -- feed pubDate; nullable if missing
+    ingested_at  timestamptz NOT NULL DEFAULT now()
+);
+```
+
+**Stage 1 code shape:** one ingest function — read `tickers.txt` → fetch each
+per-ticker RSS feed → normalize to rows (log+skip malformed) → `INSERT … ON
+CONFLICT DO NOTHING`. Plus a one-line scheduler and `schema.sql`. New deps:
+`httpx`, `feedparser`, `psycopg` (or `asyncpg`).
+
 ### Stage 2 — Labelling strategy
 
 This is the most underrated decision and a strong talking point.
