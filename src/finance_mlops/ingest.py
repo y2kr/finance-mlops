@@ -40,9 +40,6 @@ TICKERS_FILE = Path(os.environ.get("TICKERS_FILE", "tickers.txt"))
 
 
 def feed_url(ticker: str) -> str:
-    # Google News search RSS per ticker: reliable, and titles are stable enough
-    # to dedup on (Yahoo's per-ticker RSS is flaky). ponytail: the one swap point
-    # if you move to Finnhub/another feed later — same row shape downstream.
     q = quote_plus(f"{ticker} stock")
     return f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
 

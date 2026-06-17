@@ -91,6 +91,18 @@ a light lean — but these are yours to settle.
 - **Benchmark to beat.** Off-the-shelf FinBERT, or a lexicon baseline. You need
   something to measure "did fine-tuning actually help".
 
+#### Settled (2026-06-17)
+
+| Decision | Resolution |
+|---|---|
+| **Ticker universe** | Small hand-curated `tickers.txt` (settled in Stage 1). |
+| **Sentiment grain** | **Document-level, ticker-blind model.** The `ticker` on a row is *which feed surfaced the headline*, not an aspect target — same headline under two tickers gets the same label. Aspect-level sentiment deferred. Per-ticker storage earns its keep for joining to holdings (Stage 12), **not** differential sentiment. |
+| **Label schema** | **4-class: bullish / bearish / neutral / irrelevant.** `irrelevant` = document-level *non-financial* text (consistent with the ticker-blind model) — a feed-quality signal, not per-ticker off-target. **Single** classifier, not a two-stage relevance gate. |
+| **Cold start** | Day-one training = public corpora (PhraseBank/FiQA — bull/bear/neutral) **+ injected free non-financial headlines labelled `irrelevant`** (any generic news set: AG News, HuffPost headlines, etc.). Makes the 4th class trainable day one without a corpus that ships the label. Financial-but-off-target junk (listicles, passing mentions) is *not* caught at cold start — refined later via Stage 2 weak-labels + gold set. |
+| **Unit of classification** | **Headline only.** Matches the single-sentence corpus grain, never null (`headline NOT NULL`), no train/serve skew. `summary` is still stored — revisit for the Stage 4 fine-tune where longer context helps. |
+| **Success metric** | Headline number = **macro-F1 over all 4 classes**. Honest gate metric = **macro-F1 over the 3 sentiment classes**, measured on the Stage 2 gold set (not the corpus). Bar = **beat the benchmark + a `bearish`-F1 floor**; exact numbers filled once the gold set exists. (`irrelevant` is the easy class — kept out of the gate metric so it can't pad the average.) |
+| **Benchmark** | **Off-the-shelf FinBERT** (3 sentiment classes, on the gold set) as the external reference-to-beat — and it **doubles as the Stage 4 base model**, so "beat off-the-shelf FinBERT" directly measures whether fine-tuning helped. Internal baseline = Stage 3 TF-IDF + logreg (the floor Stage 4 must clear). No lexicon floor. |
+
 ### Stage 1 — Data ingestion
 
 - **Source(s).** See the tools section. Decide primary + fallback.
@@ -112,7 +124,7 @@ a light lean — but these are yours to settle.
 |---|---|
 | **Ticker universe** | Small hand-curated `tickers.txt`, one symbol/line, `#` comments. No DB table for the watchlist. |
 | **Source** | **RSS-only** (per-ticker Yahoo / Google News feeds). No API keys/accounts. Finnhub is a documented future swap-in (for summaries/backfill) — not built now. |
-| **Cold start** | Day-one model trains on **public corpora** (Financial PhraseBank/FiQA, Stage 2). Live RSS accumulates for drift + retraining. |
+| **Cold start** | Day-one model trains on **public corpora** (Financial PhraseBank/FiQA, Stage 2) **+ injected non-financial headlines for the `irrelevant` class** (see Stage 0). Live RSS accumulates for drift + retraining. |
 | **Pull mode** | **Polling** (RSS forces it). **Hourly**, via plain cron / sleep-loop now; Dagster takes over at Stage 6 without touching ingest code. |
 | **Row grain** | **One row per (article × ticker)**. Same story in two feeds = two rows. Matches per-ticker sentiment grain; no arrays/join table. |
 | **Dedup** | `UNIQUE dedup_key = sha256(ticker + normalized_title)`, `ON CONFLICT DO NOTHING`. Robust to Google News URL noise. Cross-outlet fuzzy dedup deferred. |
@@ -144,7 +156,10 @@ This is the most underrated decision and a strong talking point.
 - **Training labels.** Bootstrap from existing labelled corpora — Financial
   PhraseBank (the standard ~5k labelled sentences), plus FiQA, SemEval-2017 Task 5,
   Twitter Financial News Sentiment. Decide which to combine and how to reconcile
-  their differing label definitions.
+  their differing label definitions. **Note (Stage 0): the schema is 4-class** —
+  these corpora supply only bull/bear/neutral; the 4th class, `irrelevant`, is
+  seeded from injected non-financial headlines (generic news sets), since no
+  financial corpus ships an `irrelevant` label.
 - **Labels for the *live* stream (needed for retraining and live evaluation).**
   Your incoming news is unlabelled. Pick how you generate labels:
   - **Local LLM weak-labelling** — run a small model via Ollama to label new
