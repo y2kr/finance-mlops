@@ -9,12 +9,6 @@ automated retraining).
 See [`design.md`](design.md) for the full architecture and the stage-by-stage
 plan.
 
-## Stack
-
-Python 3.12, managed with **uv**. Lint + format with **Ruff**. The wider
-ML/MLOps stack (Polars, MLflow, DVC, Dagster, BentoML, Evidently, NannyML, …)
-is added per stage as the code that needs it lands — see `design.md`.
-
 ## Dev setup
 
 ```bash
@@ -28,11 +22,3 @@ uv run pytest             # tests
 ```
 
 CI (`.github/workflows/ci.yml`) runs ruff + pytest on every push and PR.
-
-## Status
-
-Commit #1: project scaffold only. Stage 1 (data ingestion) is next.
-
-## License
-
-MIT — see [`LICENSE`](LICENSE).
