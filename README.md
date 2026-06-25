@@ -2,9 +2,10 @@
 
 A self-hosted, end-to-end MLOps project: a small model classifies financial
 news headlines as **bullish / bearish / neutral** per ticker. The model is
-deliberately simple — the **operations loop around it is the real deliverable**
+simple — the **operations loop around it is the real deliverable**
 (tracking, versioning, orchestration, serving, monitoring, eval gates,
-automated retraining).
+automated retraining). This is a LEARNING excerise to fill my brain with
+ML advancements.
 
 See [`design.md`](design.md) for the full architecture and the stage-by-stage
 plan.
