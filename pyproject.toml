@@ -15,6 +15,9 @@ ingest = [
 label = [
     "ollama>=0.5",
 ]
+baseline = [
+    "scikit-learn>=1.5",
+]
 
 [dependency-groups]
 dev = [
