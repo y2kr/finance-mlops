@@ -12,8 +12,9 @@ ingest = [
     "feedparser>=6",
     "psycopg[binary]>=3.2",
 ]
-# ponytail: kept empty on purpose. Add deps per-stage as code lands
-# (e.g. polars + httpx for Stage 1 ingestion), not speculatively now.
+label = [
+    "ollama>=0.5",
+]
 
 [dependency-groups]
 dev = [

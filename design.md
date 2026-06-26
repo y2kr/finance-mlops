@@ -98,10 +98,10 @@ a light lean — but these are yours to settle.
 | **Ticker universe** | Small hand-curated `tickers.txt` (settled in Stage 1). |
 | **Sentiment grain** | **Document-level, ticker-blind model.** The `ticker` on a row is *which feed surfaced the headline*, not an aspect target — same headline under two tickers gets the same label. Aspect-level sentiment deferred. Per-ticker storage earns its keep for joining to holdings (Stage 12), **not** differential sentiment. |
 | **Label schema** | **4-class: bullish / bearish / neutral / irrelevant.** `irrelevant` = document-level *non-financial* text (consistent with the ticker-blind model) — a feed-quality signal, not per-ticker off-target. **Single** classifier, not a two-stage relevance gate. |
-| **Cold start** | Day-one training = public corpora (PhraseBank/FiQA — bull/bear/neutral) **+ injected free non-financial headlines labelled `irrelevant`** (any generic news set: AG News, HuffPost headlines, etc.). Makes the 4th class trainable day one without a corpus that ships the label. Financial-but-off-target junk (listicles, passing mentions) is *not* caught at cold start — refined later via Stage 2 weak-labels + gold set. |
+| **Cold start** | Day-one baseline trains on **PhraseBank only** (`75Agree \ AllAgree`, 3-class — bull/bear/neutral). FiQA and the injected-`irrelevant` seed (AG News) both **dropped** (see Stage 2 rationale): tweet/aspect skew and a wrong-distribution `irrelevant` class aren't worth wiring into a throwaway model. The baseline is **3-class**; `irrelevant` enters only once Ollama weak-labels accumulate from live RSS, where its true distribution lives. Consequence to track: model output contract goes 3→4 class at Stage 4/7 (a serving version bump, not a retrain). |
 | **Unit of classification** | **Headline only.** Matches the single-sentence corpus grain, never null (`headline NOT NULL`), no train/serve skew. `summary` is still stored — revisit for the Stage 4 fine-tune where longer context helps. |
 | **Success metric** | Headline number = **macro-F1 over all 4 classes**. Honest gate metric = **macro-F1 over the 3 sentiment classes**, measured on the Stage 2 gold set (not the corpus). Bar = **beat the benchmark + a `bearish`-F1 floor**; exact numbers filled once the gold set exists. (`irrelevant` is the easy class — kept out of the gate metric so it can't pad the average.) |
-| **Benchmark** | **Off-the-shelf FinBERT** (3 sentiment classes, on the gold set) as the external reference-to-beat — and it **doubles as the Stage 4 base model**, so "beat off-the-shelf FinBERT" directly measures whether fine-tuning helped. Internal baseline = Stage 3 TF-IDF + logreg (the floor Stage 4 must clear). No lexicon floor. |
+| **Benchmark** | **Off-the-shelf FinBERT** (3 sentiment classes, on the eval anchor) as the external reference-to-beat — and it **doubles as the Stage 4 base model**, so "beat off-the-shelf FinBERT" directly measures whether fine-tuning helped. Internal baseline = Stage 3 TF-IDF + logreg (the floor Stage 4 must clear). No lexicon floor. (FNSPID rejected as a training source: binary labels, FinBERT-generated → circular against this benchmark.) |
 
 ### Stage 1 — Data ingestion
 
@@ -124,7 +124,7 @@ a light lean — but these are yours to settle.
 |---|---|
 | **Ticker universe** | Small hand-curated `tickers.txt`, one symbol/line, `#` comments. No DB table for the watchlist. |
 | **Source** | **RSS-only** (per-ticker Yahoo / Google News feeds). No API keys/accounts. Finnhub is a documented future swap-in (for summaries/backfill) — not built now. |
-| **Cold start** | Day-one model trains on **public corpora** (Financial PhraseBank/FiQA, Stage 2) **+ injected non-financial headlines for the `irrelevant` class** (see Stage 0). Live RSS accumulates for drift + retraining. |
+| **Cold start** | Day-one baseline trains on **PhraseBank only** (`75Agree \ AllAgree`, 3-class — see Stage 0/2). Live RSS accumulates for weak-labelling, drift + retraining, and is where the `irrelevant` class is first learned. |
 | **Pull mode** | **Polling** (RSS forces it). **Hourly**, via plain cron / sleep-loop now; Dagster takes over at Stage 6 without touching ingest code. |
 | **Row grain** | **One row per (article × ticker)**. Same story in two feeds = two rows. Matches per-ticker sentiment grain; no arrays/join table. |
 | **Dedup** | `UNIQUE dedup_key = sha256(ticker + normalized_title)`, `ON CONFLICT DO NOTHING`. Robust to Google News URL noise. Cross-outlet fuzzy dedup deferred. |
@@ -180,16 +180,38 @@ This is the most underrated decision and a strong talking point.
 
 | Decision | Resolution |
 |---|---|
-| **Eval ground truth** | **PhraseBank `sentences_75agree` (~3.4k) as held-out eval only** — never trained on. No manual annotation. |
-| **Eval gate scope** | **3-class macro-F1** (bullish/bearish/neutral) on PhraseBank. `irrelevant` prediction rate monitored via Grafana, not graded. |
+| **Eval ground truth** | **PhraseBank `AllAgree` (~2.3k) as held-out eval only** — frozen, DVC-versioned, never trained on. Training uses the disjoint remainder `75Agree \ AllAgree`. (PhraseBank agreement tiers are *nested supersets* — `AllAgree ⊂ 75Agree ⊂ 66Agree ⊂ 50Agree` — so holding out `75Agree` while training on a lower tier would leak the whole eval set. The set-difference is leak-free by construction and puts the highest-agreement labels where the gate needs them.) No manual annotation. |
+| **Eval gate scope** | **3-class macro-F1** (bullish/bearish/neutral) on `AllAgree`. The deployed model can still emit `irrelevant`: score the real 4-class output against the 3 true classes (confusion matrix 4-pred × 3-true), then macro-average P/R/F1 over the 3 sentiment classes only. An `irrelevant` misfire on a sentiment row **counts as wrong** (no TP for any graded class) — grades the served model and punishes an over-eager `irrelevant` class. *Not* logit-masking and *not* row-dropping (both grade a model you don't serve / let it game its denominator). `irrelevant` prediction rate monitored via Grafana, not graded. |
 | **Label schema** | **4-class** (bullish/bearish/neutral/irrelevant). Gate covers 3 classes only. |
 | **Canonical rubric** | **PhraseBank-style "investor-polarity-of-the-text"**: polarity for an investor holding the mentioned company, judged from the headline alone. Tie-breakers: factual/no clear direction → `neutral`; not about a tradable company/market → `irrelevant`. Written once to **`LABELING.md`** (carries a `rubric_version`) — single source of truth quoted verbatim by the Ollama prompt. Rejected forward-return-defined labels (different latent target, silently switches the task). |
-| **Training labels** | **Ollama weak-labels only** — live RSS stream, batch/offline. Confidence ≥ 0.6 kept; below 0.6 dropped from training (one knob, no sample-weighting). Store `{label, confidence, rationale, model_tag, prompt_version}` in Postgres. |
+| **Training labels** | **Ollama weak-labels only** — live RSS stream, batch/offline. **Store every prediction** in the `weak_labels` table (below), including low-confidence + rationale (free audit data); the `confidence ≥ 0.6` cut is a **query-time filter at train-set assembly**, not an ingestion gate, so the threshold can be re-tuned without re-labelling. One knob, no sample-weighting. |
+| **Weak-label storage** | Append-only `weak_labels` table (below), one-to-many on `news` (a row can be re-labelled under a new model/prompt/rubric). `UNIQUE (news_id, model_tag, prompt_version, rubric_version)` + `ON CONFLICT DO NOTHING` makes re-runs idempotent while keeping immutability (a new version = a new tuple). `label` as `text`, not a PG enum (no migration when a class is added; the JSON schema already enum-constrains the labeller). |
 | **Weak-labeller** | **`qwen3:14b`** (fits 4070 Super 12GB VRAM), thinking mode disabled, tag+digest pinned. Ollama structured output, enum-constrained JSON `{label, confidence, rationale}`, temperature 0. Prompt quotes `LABELING.md` + 1–2 PhraseBank few-shots per class. |
-| **`irrelevant` cold-start seed** | **AG News, World + Sports categories only** (~1k), Business/Sci-Tech explicitly excluded (would teach "financial = irrelevant"). Throwaway bootstrap — washed out once Ollama weak-labels accumulate from live RSS. |
+| **`irrelevant` cold-start seed** | **Dropped.** AG-News (sport/world) would teach the wrong `irrelevant` distribution — production `irrelevant` is financial-adjacent junk from the "AAPL stock" RSS query (listicles, passing mentions), not football scores. The baseline ships **3-class**; `irrelevant` is learned only from Ollama weak-labels on live RSS, where its real distribution lives. |
+| **FiQA** | **Cut from cold start.** Continuous [-1,+1] scores, aspect-level targets, and tweet text would force binning/aspect-collapse/skew decisions for a throwaway model. Documented future add (like Finnhub), not built now. |
 | **Label-drift control** | (1) `LABELING.md` versioned in git, prompt generated from it. (2) Every weak-label row stamped `(model_tag+digest, prompt_version, rubric_version)` and **immutable** — re-labelling produces a new DVC dataset version, never mutates in place. (3) Model+prompt pinned → upgrades are explicit version bumps. |
 | **Label Studio / manual annotation** | **Dropped entirely.** |
 | **Phoenix** | **Skipped for v1.** `{label, confidence, rationale, model_tag, prompt_version}` in Postgres + Grafana panel covers the audit need with no new service. |
+
+```sql
+CREATE TABLE IF NOT EXISTS weak_labels (
+    id             bigserial PRIMARY KEY,
+    news_id        bigint NOT NULL REFERENCES news(id),
+    label          text   NOT NULL,            -- bullish|bearish|neutral|irrelevant
+    confidence     real   NOT NULL,            -- stored raw; ≥0.6 filter applied at train time
+    rationale      text,
+    model_tag      text   NOT NULL,            -- qwen3:14b@sha256:...
+    prompt_version int    NOT NULL,
+    rubric_version int    NOT NULL,
+    labelled_at    timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (news_id, model_tag, prompt_version, rubric_version)
+);
+```
+
+**Stage 2 code shape:** one labeller — select `news` rows lacking a label for the
+current `(model_tag, prompt_version, rubric_version)` triple → build the prompt
+from `LABELING.md` + few-shots → Ollama structured output (enum JSON, temp 0,
+thinking off) → `INSERT … ON CONFLICT DO NOTHING`. New deps: an Ollama client.
 
 ### Stage 3 — Baseline model
 
@@ -198,6 +220,15 @@ This is the most underrated decision and a strong talking point.
 - **Scope of this stage.** The point isn't the model; it's wrapping the *entire*
   ops loop around it. Decide to resist adding model complexity until Stage 1's
   machinery exists.
+
+#### Settled (2026-06-26)
+
+| Decision | Resolution |
+|---|---|
+| **Model** | **TF-IDF + logistic regression**, 3-class. Bag-of-words sentiment vocabulary transfers across the PhraseBank→RSS skew well enough for a throwaway baseline whose only job is to be the floor Stage 4 must beat. |
+| **Training data** | **PhraseBank `75Agree \ AllAgree`** (3-class, in-distribution with the eval anchor). No FiQA, no AG-News (see Stage 0/2). |
+| **Train-set assembly** | Day-zero is a single corpus → trivial load, no multi-source pipeline. The unified contract `(text, label, source, weight=1.0)` and a **DVC-versioned built file** (`data/train.parquet`, not a SQL view — corpus files aren't in Postgres) become relevant only at Stage 4+/retraining, when weak-labelled RSS (`news ⨝ weak_labels WHERE confidence ≥ 0.6`) is concatenated in. `weight` always 1.0 now; column exists so adding weighting later doesn't reshape the dataset. Corpus + live always concatenated; any decay/drop policy deferred to Stage 10. |
+| **Eval** | 3-class macro-F1 on PhraseBank `AllAgree` (Stage 2 scoring rule). No MLflow yet (Stage 5) — a script that reports F1 is the start; tracking wires in without reshaping it. |
 
 ### Stage 4 — Fine-tuned model
 

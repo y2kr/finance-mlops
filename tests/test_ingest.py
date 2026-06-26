@@ -1,9 +1,3 @@
-"""Pure-function checks for the ingester (no DB, no network).
-
-The DB insert path is declarative SQL (ON CONFLICT DO NOTHING) and not worth a
-live Postgres in unit tests; the parsing + dedup logic is what can break.
-"""
-
 from finance_mlops import ingest
 
 
@@ -20,7 +14,6 @@ def test_dedup_key_ignores_case_and_whitespace():
 
 
 def test_dedup_key_differs_by_ticker():
-    # Same headline in two feeds must produce two rows (per-ticker grain).
     assert ingest.dedup_key("AAPL", "Big merger news") != ingest.dedup_key(
         "MSFT", "Big merger news"
     )
@@ -39,14 +32,14 @@ def test_rows_for_ticker_maps_fields_and_skips_titleless(monkeypatch):
                     "source": {"title": "Reuters"},
                     "published_parsed": (2026, 6, 17, 12, 0, 0, 0, 0, 0),
                 },
-                {"title": "   ", "link": "https://news.example/empty"},  # skipped
+                {"title": "   ", "link": "https://news.example/empty"},
             ]
         },
     )()
     monkeypatch.setattr(ingest.feedparser, "parse", lambda _url: fake)
 
     rows = ingest.rows_for_ticker("AAPL")
-    assert len(rows) == 1  # title-less entry dropped
+    assert len(rows) == 1
     row = rows[0]
     assert row["ticker"] == "AAPL"
     assert row["headline"] == "Apple soars"
