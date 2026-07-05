@@ -17,6 +17,7 @@ label = [
 ]
 baseline = [
     "scikit-learn>=1.5",
+    "mlflow>=3",
 ]
 
 [dependency-groups]
@@ -24,6 +25,7 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
     "pre-commit>=3.8",
+    "dvc[s3]>=3",
 ]
 
 [build-system]

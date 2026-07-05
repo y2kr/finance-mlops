@@ -35,7 +35,7 @@ VALUES (%(dedup_key)s, %(ticker)s, %(source)s, %(headline)s, %(summary)s,
 ON CONFLICT (dedup_key) DO NOTHING
 """
 
-DB_URL = os.environ.get("DATABASE_URL", "postgresql:///finance_mlops")
+DB_URL = os.environ.get("DATABASE_URL", "postgresql://finance:finance@localhost:5432/finance_mlops")
 TICKERS_FILE = Path(os.environ.get("TICKERS_FILE", "tickers.txt"))
 
 

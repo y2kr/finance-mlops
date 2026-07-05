@@ -1,0 +1,6 @@
+outs:
+- md5: 04173e5ea503d41c5386b2c1124172d4.dir
+  size: 2022643
+  nfiles: 6
+  hash: md5
+  path: phrasebank

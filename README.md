@@ -24,6 +24,35 @@ uv run pytest             # tests
 
 CI (`.github/workflows/ci.yml`) runs ruff + pytest on every push and PR.
 
+## Platform (Stage 5)
+
+Postgres, MinIO (S3-compatible object store) and an MLflow tracking server run as
+one Compose stack. MLflow uses a dedicated `mlflow` database on the same Postgres
+(reused, not a second instance) and stores artifacts in MinIO via proxied access;
+DVC versions datasets to the same MinIO.
+
+```bash
+docker compose up -d --build   # postgres + minio + mlflow + ingest
+```
+
+An `ingest` service runs Stage 1 on a loop (`INGEST_INTERVAL`, default hourly)
+so the RSS stream accumulates in the background — drift and retraining (Stages
+8/10) need weeks of banked history that RSS can't backfill. Dagster replaces it
+at Stage 6. Weak-labelling (Stage 2) stays manual (Ollama/VRAM), run in batches.
+
+- **Docker access:** if you're not in the `docker` group, prefix with `sudo` or
+  `sudo usermod -aG docker $USER && newgrp docker`.
+- MLflow UI → http://localhost:5000 · MinIO console → http://localhost:9001
+  (`minioadmin`/`minioadmin`). Override any default via a gitignored `.env`
+  (`POSTGRES_*`, `MINIO_ROOT_*`).
+
+**Data versioning (DVC → MinIO `dvc` bucket):**
+
+```bash
+uv run dvc pull    # fetch data/phrasebank/ from MinIO (after the stack is up)
+uv run dvc push    # publish a new dataset version
+```
+
 ## Running the pipeline (manual)
 
 No orchestrator yet — Dagster lands at Stage 6. Until then each stage is a module
@@ -31,13 +60,13 @@ you run by hand, in order.
 
 **Prerequisites**
 
-- **Postgres** reachable at `postgresql:///finance_mlops` (`createdb finance_mlops`);
-  override with `DATABASE_URL`. Needed by Stages 1–2.
+- The **Compose stack up** (Postgres for Stages 1–2, MLflow for Stage 3). Default
+  `DATABASE_URL` = `postgresql://finance:finance@localhost:5432/finance_mlops`,
+  `MLFLOW_TRACKING_URI` = `http://localhost:5000`; both overridable.
 - **Ollama** running with the weak-label model pulled — `ollama pull qwen3:14b`.
   Needed by Stage 2 only.
-- **Financial PhraseBank v1.0** unzipped into `data/phrasebank/` (gitignored) —
-  must contain `Sentences_AllAgree.txt` and `Sentences_75Agree.txt`. Needed by
-  Stage 3 only.
+- **Financial PhraseBank v1.0** in `data/phrasebank/` — `uv run dvc pull` fetches
+  it from MinIO (or unzip manually). Needed by Stage 3.
 
 ```bash
 # Stage 1 — ingest: per-ticker RSS -> Postgres `news`
@@ -46,9 +75,10 @@ uv run --extra ingest python -m finance_mlops.ingest
 # Stage 2 — weak-label: Ollama labels unlabelled `news` -> `weak_labels`
 uv run --extra label python -m finance_mlops.label
 
-# Stage 3 — baseline: TF-IDF + logreg on PhraseBank, reports 3-class macro-F1
+# Stage 3 — baseline: TF-IDF + logreg on PhraseBank; logs the run to MLflow and
+# registers it as `finance-sentiment` v1 @champion
 uv run --extra baseline python -m finance_mlops.baseline
 ```
 
 Common overrides: `DATABASE_URL`, `TICKERS_FILE` (Stage 1); `WEAK_LABEL_MODEL`,
-`WEAK_LABEL_BATCH` (Stage 2); `PHRASEBANK_DIR` (Stage 3).
+`WEAK_LABEL_BATCH` (Stage 2); `PHRASEBANK_DIR`, `MLFLOW_TRACKING_URI` (Stage 3).

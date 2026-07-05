@@ -21,3 +21,12 @@ def test_train_eval_split_holds_out_allagree(tmp_path):
     train_rows, eval_rows = baseline.train_eval_split(tmp_path)
     assert {t for t, _ in train_rows} == {"C"}
     assert {t for t, _ in eval_rows} == {"A", "B"}
+
+
+def test_evaluate_exposes_shared_gate_metrics():
+    y_true = ["bullish", "bearish", "neutral", "neutral"]
+    y_pred = ["bullish", "bearish", "neutral", "bearish"]
+    m = baseline.evaluate(y_true, y_pred)
+    assert set(m) >= {"macro_f1", "bearish_f1", "report", "scores"}
+    assert m["bearish_f1"] == m["scores"]["bearish"]["f1-score"]
+    assert 0.0 <= m["macro_f1"] <= 1.0
