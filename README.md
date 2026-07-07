@@ -78,7 +78,15 @@ uv run --extra label python -m finance_mlops.label
 # Stage 3 — baseline: TF-IDF + logreg on PhraseBank; logs the run to MLflow and
 # registers it as `finance-sentiment` v1 @champion
 uv run --extra baseline python -m finance_mlops.baseline
+
+# Stage 4 — finetune: full fine-tune of pinned FinBERT on the same split; registers
+# `finance-sentiment` v2 @challenger and prints the promotion gate (needs a CUDA GPU)
+uv run --extra finetune python -m finance_mlops.finetune
 ```
 
+Stage 4 trains on the GPU and never moves `@champion` — a passing challenger is
+promoted by hand (the run prints the one-liner). Don't re-run Stage 3 after
+promoting v2, or its unconditional `@champion` set will yank the alias back.
+
 Common overrides: `DATABASE_URL`, `TICKERS_FILE` (Stage 1); `WEAK_LABEL_MODEL`,
-`WEAK_LABEL_BATCH` (Stage 2); `PHRASEBANK_DIR`, `MLFLOW_TRACKING_URI` (Stage 3).
+`WEAK_LABEL_BATCH` (Stage 2); `PHRASEBANK_DIR`, `MLFLOW_TRACKING_URI` (Stages 3–4).

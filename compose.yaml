@@ -55,7 +55,9 @@ services:
         condition: service_healthy
       createbuckets:
         condition: service_completed_successfully
-    environment: *minio-creds
+    environment:
+      <<: *minio-creds
+      MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE: "true"
     command: >
       mlflow server --host 0.0.0.0 --port 5000
       --backend-store-uri postgresql://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:-finance}@postgres:5432/mlflow

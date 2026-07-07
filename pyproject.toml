@@ -19,6 +19,13 @@ baseline = [
     "scikit-learn>=1.5",
     "mlflow>=3",
 ]
+finetune = [
+    "torch",
+    "transformers>=4.46",
+    "accelerate",
+    "mlflow>=3",
+    "scikit-learn>=1.5",
+]
 
 [dependency-groups]
 dev = [
