@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: serving
+    static_configs:
+      - targets: [serve:3001]
+  - job_name: monitoring
+    honor_labels: true
+    static_configs:
+      - targets: [pushgateway:9091]

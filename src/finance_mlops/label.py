@@ -8,7 +8,7 @@ from pathlib import Path
 
 import psycopg
 
-from finance_mlops.ingest import DB_URL
+from finance_mlops.settings import DB_URL
 
 log = logging.getLogger("label")
 

@@ -5,14 +5,31 @@ x-minio-creds: &minio-creds
   AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
   MLFLOW_S3_ENDPOINT_URL: http://minio:9000
 
+x-runtime: &runtime
+  image: finance-mlops-runtime
+  build:
+    context: .
+    dockerfile: docker/runtime.Dockerfile
+  environment: &runtime-env
+    <<: *minio-creds
+    DATABASE_URL: postgresql://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:-finance}@postgres:5432/${POSTGRES_DB:-finance_mlops}
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+    PHRASEBANK_DIR: /app/data/phrasebank
+  volumes:
+    - ./src:/app/src:ro
+    - ./data:/app/data:ro
+    - ./LABELING.md:/app/LABELING.md:ro
+    - ./tickers.txt:/app/tickers.txt:ro
+    - ./stage3-baseline-report.md:/app/stage3-baseline-report.md:ro
+
 services:
   postgres:
-    image: postgres:17
+    image: postgres@sha256:f4c66b820c6f974249089d3d16d86a3698eae11e8746eb6644b2271031e91232
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-finance}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-finance}
       POSTGRES_DB: ${POSTGRES_DB:-finance_mlops}
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:5432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/initdb-mlflow.sql:/docker-entrypoint-initdb.d/initdb-mlflow.sql:ro
@@ -20,31 +37,30 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-finance}"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
 
   minio:
-    image: minio/minio
+    image: quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    ports: ["9000:9000", "9001:9001"]
-    volumes:
-      - miniodata:/data
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]
+    volumes: ["miniodata:/data"]
     healthcheck:
       test: ["CMD-SHELL", "mc ready local || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
 
   createbuckets:
-    image: minio/mc
+    image: quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     depends_on:
       minio:
         condition: service_healthy
     entrypoint: >
       sh -c "mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin}
-      && mc mb -p local/mlflow-artifacts local/dvc"
+      && mc mb --ignore-existing local/mlflow-artifacts local/dvc"
 
   mlflow:
     build:
@@ -57,28 +73,80 @@ services:
         condition: service_completed_successfully
     environment:
       <<: *minio-creds
-      MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE: "true"
     command: >
       mlflow server --host 0.0.0.0 --port 5000
+      --allowed-hosts localhost:5000,127.0.0.1:5000,mlflow:5000
       --backend-store-uri postgresql://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:-finance}@postgres:5432/mlflow
       --artifacts-destination s3://mlflow-artifacts
-    ports: ["5000:5000"]
+    ports: ["127.0.0.1:5000:5000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
-  ingest:
-    build:
-      context: .
-      dockerfile: docker/app.Dockerfile
+  bootstrap:
+    <<: *runtime
     depends_on:
-      postgres:
+      mlflow:
         condition: service_healthy
+    command: python -m finance_mlops.baseline
+    restart: "no"
+
+  dagster:
+    <<: *runtime
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-finance}:${POSTGRES_PASSWORD:-finance}@postgres:5432/${POSTGRES_DB:-finance_mlops}
-      INGEST_INTERVAL: ${INGEST_INTERVAL:-3600}
+      <<: *runtime-env
+      DAGSTER_HOME: /app/dagster
+      OLLAMA_HOST: ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      PUSHGATEWAY_URL: http://pushgateway:9091
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    command: dagster dev -h 0.0.0.0 -p 3000 -m finance_mlops.orchestration
+    ports: ["127.0.0.1:3002:3000"]
     volumes:
       - ./src:/app/src:ro
+      - ./data:/app/data:ro
+      - ./LABELING.md:/app/LABELING.md:ro
       - ./tickers.txt:/app/tickers.txt:ro
-    restart: unless-stopped
+      - ./stage3-baseline-report.md:/app/stage3-baseline-report.md:ro
+      - ./docker/dagster.yaml:/app/dagster/dagster.yaml:ro
+      - dagsterdata:/app/dagster/storage
+
+  serve:
+    <<: *runtime
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    command: bentoml serve finance_mlops.serve:FinanceSentiment --host 0.0.0.0 --port 3001
+    ports: ["127.0.0.1:3004:3001"]
+
+  pushgateway:
+    image: prom/pushgateway:v1.11.2
+    ports: ["127.0.0.1:9091:9091"]
+
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    volumes: ["./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    image: grafana/grafana:12.3.0
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./docker/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./docker/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./docker/grafana/finance-mlops.json:/var/lib/grafana/dashboards/finance-mlops.json:ro
+    ports: ["127.0.0.1:3003:3000"]
 
 volumes:
   pgdata:
   miniodata:
+  dagsterdata:
+  grafanadata:

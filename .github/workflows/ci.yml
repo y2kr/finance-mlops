@@ -13,6 +13,6 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.12"
-      - run: uv sync --all-extras --dev
+      - run: uv sync --dev --extra ingest --extra label --extra baseline --extra serve --extra orchestrate --extra monitor
       - run: ./scripts/check
       - run: uv run pytest

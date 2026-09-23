@@ -1,0 +1,78 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Serving up",
+      "gridPos": {"h": 6, "w": 4, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "up{job=\"serving\"}", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Estimated accuracy",
+      "gridPos": {"h": 6, "w": 5, "x": 4, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "finance_estimated_accuracy", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Drift detected",
+      "gridPos": {"h": 6, "w": 5, "x": 9, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "finance_model_drifted", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Breach streak",
+      "gridPos": {"h": 6, "w": 5, "x": 14, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "finance_monitor_breach_streak", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Prediction classes",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "sum by (sentiment) (rate(serve_predictions_total[5m]))", "legendFormat": "{{sentiment}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Request rate",
+      "gridPos": {"h": 8, "w": 7, "x": 12, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "rate(serve_predict_requests_total[5m])", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 latency",
+      "gridPos": {"h": 8, "w": 10, "x": 0, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(bentoml_service_request_duration_seconds_bucket{endpoint=\"/predict\"}[5m])))", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors",
+      "gridPos": {"h": 8, "w": 9, "x": 10, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "sum(rate(bentoml_service_request_total{http_response_code=~\"5..\"}[5m]))", "refId": "A"}]
+    },
+    {
+      "type": "table",
+      "title": "Pipeline age seconds",
+      "gridPos": {"h": 8, "w": 19, "x": 0, "y": 22},
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "targets": [{"expr": "time() - finance_pipeline_last_success_timestamp", "format": "table", "instant": true, "refId": "A"}]
+    }
+  ],
+  "schemaVersion": 42,
+  "tags": ["mlops", "finance"],
+  "templating": {
+    "list": [{"name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}}]
+  },
+  "time": {"from": "now-24h", "to": "now"},
+  "title": "Finance MLOps",
+  "uid": "finance-mlops",
+  "version": 1
+}

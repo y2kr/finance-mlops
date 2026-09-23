@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+curl --fail --silent --show-error \
+  -H 'Content-Type: application/json' \
+  -d '{"headlines":["Company profits beat forecasts","Shares fall after weak guidance"]}' \
+  http://localhost:3004/predict
+printf '\nDagster: http://localhost:3002\nMLflow: http://localhost:5000\nGrafana: http://localhost:3003\n'

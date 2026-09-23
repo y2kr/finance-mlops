@@ -7,6 +7,7 @@ from pathlib import Path
 import mlflow
 import mlflow.sklearn
 from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, f1_score
@@ -102,13 +103,28 @@ def track(model, train_rows, eval_rows, metrics) -> None:
         mlflow.sklearn.log_model(model, name="model")
         uri = f"runs:/{active.info.run_id}/model"
     version = mlflow.register_model(uri, MODEL_NAME).version
-    MlflowClient().set_registered_model_alias(MODEL_NAME, "champion", version)
-    log.info("registered %s v%s as @champion", MODEL_NAME, version)
+    client = MlflowClient()
+    try:
+        client.get_model_version_by_alias(MODEL_NAME, "champion")
+        alias = "challenger"
+    except MlflowException:
+        alias = "champion"
+    client.set_registered_model_alias(MODEL_NAME, alias, version)
+    log.info("registered %s v%s as @%s", MODEL_NAME, version, alias)
+
+
+def bootstrap(data_dir: Path = DATA_DIR) -> float | None:
+    mlflow.set_tracking_uri(TRACKING_URI)
+    try:
+        MlflowClient().get_model_version_by_alias(MODEL_NAME, "champion")
+        return None
+    except MlflowException:
+        return run(data_dir)
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    run()
+    bootstrap()
 
 
 if __name__ == "__main__":

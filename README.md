@@ -1,92 +1,123 @@
 # finance-mlops
 
-A self-hosted, end-to-end MLOps project: a small model classifies financial
-news headlines as **bullish / bearish / neutral** per ticker. The model is
-simple — the **operations loop around it is the real deliverable**
-(tracking, versioning, orchestration, serving, monitoring, eval gates,
-automated retraining). This is a LEARNING excerise to fill my brain with
-ML advancements.
+A local, end-to-end MLOps loop for three-class financial-news sentiment. The model is intentionally simple; ingestion, lineage, orchestration, serving, monitoring, promotion, and retraining are the deliverable.
 
-See [`design.md`](design.md) for the full architecture and the stage-by-stage
-plan.
-
-## Dev setup
-
-```bash
-# install uv: https://docs.astral.sh/uv/
-uv sync --dev            # create .venv and install dev deps
-uv run pre-commit install # enable lint/format on commit
-
-uv run ruff check .       # lint
-uv run ruff format .      # format
-uv run pytest             # tests
+```mermaid
+flowchart LR
+    RSS[Google News RSS] --> PG[(Postgres)]
+    Ollama[Host Ollama] --> Labels[Weak labels]
+    PG --> Labels --> PG
+    PhraseBank[DVC PhraseBank] --> Train[TF-IDF training]
+    PG --> Train --> Gate[Frozen gold gate]
+    Gate --> Registry[MLflow Registry]
+    Registry --> API[BentoML API]
+    API --> PG
+    PG --> Monitor[Evidently + NannyML]
+    Monitor --> Prom[Prometheus]
+    Prom --> Grafana[Grafana]
+    Monitor -->|two breaches| Train
+    Dagster[Dagster] --> RSS
+    Dagster --> Labels
+    Dagster --> Train
+    Dagster --> Monitor
 ```
 
-CI (`.github/workflows/ci.yml`) runs ruff + pytest on every push and PR.
+## Start
 
-## Platform (Stage 5)
-
-Postgres, MinIO (S3-compatible object store) and an MLflow tracking server run as
-one Compose stack. MLflow uses a dedicated `mlflow` database on the same Postgres
-(reused, not a second instance) and stores artifacts in MinIO via proxied access;
-DVC versions datasets to the same MinIO.
+Requirements: Docker Compose, 25GB free disk, and `data/phrasebank/`. Restore the DVC-versioned dataset after starting MinIO if it is absent:
 
 ```bash
-docker compose up -d --build   # postgres + minio + mlflow + ingest
+docker compose up -d minio createbuckets
+uv sync --dev
+AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER:-minioadmin} \
+AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-minioadmin} uv run dvc pull
+docker compose up -d --build
 ```
 
-An `ingest` service runs Stage 1 on a loop (`INGEST_INTERVAL`, default hourly)
-so the RSS stream accumulates in the background — drift and retraining (Stages
-8/10) need weeks of banked history that RSS can't backfill. Dagster replaces it
-at Stage 6. Weak-labelling (Stage 2) stays manual (Ollama/VRAM), run in batches.
+The final command starts the full stack and bootstraps `finance-sentiment@champion` if the registry is empty. All exposed ports bind to localhost.
 
-- **Docker access:** if you're not in the `docker` group, prefix with `sudo` or
-  `sudo usermod -aG docker $USER && newgrp docker`.
-- MLflow UI → http://localhost:5000 · MinIO console → http://localhost:9001
-  (`minioadmin`/`minioadmin`). Override any default via a gitignored `.env`
-  (`POSTGRES_*`, `MINIO_ROOT_*`).
+| Service | URL | Credentials |
+|---|---|---|
+| Grafana | http://localhost:3003 | `admin` / `admin` |
+| BentoML API | http://localhost:3004 | none, local only |
+| Dagster | http://localhost:3002 | none, local only |
+| MLflow | http://localhost:5000 | none, local only |
+| MinIO | http://localhost:9001 | `minioadmin` / `minioadmin` |
+| Prometheus | http://localhost:9090 | none, local only |
 
-**Data versioning (DVC → MinIO `dvc` bucket):**
+Override development credentials through a gitignored `.env`. Do not expose this stack to a network without authentication and real secrets.
+
+## Five-minute demo
 
 ```bash
-uv run dvc pull    # fetch data/phrasebank/ from MinIO (after the stack is up)
-uv run dvc push    # publish a new dataset version
+./scripts/demo
+./scripts/smoke
 ```
 
-## Running the pipeline (manual)
-
-No orchestrator yet — Dagster lands at Stage 6. Until then each stage is a module
-you run by hand, in order.
-
-**Prerequisites**
-
-- The **Compose stack up** (Postgres for Stages 1–2, MLflow for Stage 3). Default
-  `DATABASE_URL` = `postgresql://finance:finance@localhost:5432/finance_mlops`,
-  `MLFLOW_TRACKING_URI` = `http://localhost:5000`; both overridable.
-- **Ollama** running with the weak-label model pulled — `ollama pull qwen3:14b`.
-  Needed by Stage 2 only.
-- **Financial PhraseBank v1.0** in `data/phrasebank/` — `uv run dvc pull` fetches
-  it from MinIO (or unzip manually). Needed by Stage 3.
+Example request:
 
 ```bash
-# Stage 1 — ingest: per-ticker RSS -> Postgres `news`
-uv run --extra ingest python -m finance_mlops.ingest
+curl -H 'Content-Type: application/json' \
+  -d '{"headlines":["Company profits beat forecasts"]}' \
+  http://localhost:3004/predict
+```
 
-# Stage 2 — weak-label: Ollama labels unlabelled `news` -> `weak_labels`
-uv run --extra label python -m finance_mlops.label
+The response contains the class, confidence, all class probabilities, and active MLflow model version. Predictions are retained in Postgres for monitoring.
 
-# Stage 3 — baseline: TF-IDF + logreg on PhraseBank; logs the run to MLflow and
-# registers it as `finance-sentiment` v1 @champion
-uv run --extra baseline python -m finance_mlops.baseline
+## Automated loop
 
-# Stage 4 — finetune: full fine-tune of pinned FinBERT on the same split; registers
-# `finance-sentiment` v2 @challenger and prints the promotion gate (needs a CUDA GPU)
+Dagster defines these local schedules:
+
+- RSS ingestion hourly
+- weak labeling daily at 02:00
+- monitoring hourly at `:30`
+- TF-IDF challenger training Sundays at 03:00
+- additional retraining after two consecutive monitoring breaches
+
+Weak labels require host Ollama and `qwen3:14b`:
+
+```bash
+ollama pull qwen3:14b
+sudo systemctl stop ollama
+OLLAMA_HOST=172.17.0.1:11434 ollama serve
+```
+
+This binds Ollama to Docker's host bridge instead of the LAN; use your actual `docker0` address if it differs. If Ollama is unavailable, the daily labeling asset skips without breaking the other schedules.
+
+Retraining combines PhraseBank training rows with three-class weak labels having confidence at least `0.8`, excludes frozen `AllAgree` evaluation rows, and waits for 200 new eligible labels. A challenger becomes `@champion` only when macro-F1 does not regress and bearish F1 is at least `0.525`. BentoML detects the alias change and atomically reloads it.
+
+Evidently measures headline-length and prediction-distribution drift. NannyML estimates multiclass accuracy from stored probabilities. Prometheus receives serving and pipeline metrics; Grafana provisions the `Finance MLOps` dashboard.
+
+## Optional FinBERT run
+
+The guaranteed automated path is TF-IDF. On the available CUDA GPU, run the pinned FinBERT experiment manually:
+
+```bash
 uv run --extra finetune python -m finance_mlops.finetune
 ```
 
-Stage 4 trains on the GPU and never moves `@champion` — a passing challenger is
-promoted by hand (the run prints the one-liner). Don't re-run Stage 3 after
-promoting v2, or its unconditional `@champion` set will yank the alias back.
+It registers `@challenger`; automated TF-IDF retraining remains the cheap scheduled path.
 
-Common overrides: `DATABASE_URL`, `TICKERS_FILE` (Stage 1); `WEAK_LABEL_MODEL`,
-`WEAK_LABEL_BATCH` (Stage 2); `PHRASEBANK_DIR`, `MLFLOW_TRACKING_URI` (Stages 3–4).
+## Development
+
+```bash
+uv sync --all-extras --dev
+./scripts/check
+uv run pytest
+```
+
+Manual modules remain available:
+
+```bash
+uv run --extra ingest python -m finance_mlops.ingest
+uv run --extra label --extra ingest python -m finance_mlops.label
+uv run --extra baseline python -m finance_mlops.baseline
+uv run --extra baseline --extra ingest python -m finance_mlops.retrain
+uv run --extra monitor --extra baseline python -m finance_mlops.monitor
+```
+
+Configuration uses environment variables: `DATABASE_URL`, `MLFLOW_TRACKING_URI`, `PHRASEBANK_DIR`, `OLLAMA_HOST`, `WEAK_LABEL_MODEL`, `MIN_WEAK_LABEL_CONFIDENCE`, `MIN_NEW_WEAK_LABELS`, monitoring thresholds, and service credentials.
+
+## Scope
+
+This finished local v1 deliberately excludes Kubernetes/Argo CD, Label Studio, ONNX, an end-user UI, cloud deployment, and production authentication. `design.md` retains those as possible follow-ups, not required functionality.

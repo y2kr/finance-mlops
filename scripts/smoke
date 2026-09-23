@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+python - <<'PY'
+import json
+import urllib.request
+
+for url in ("http://localhost:3003/api/health", "http://localhost:3002/server_info", "http://localhost:5000/health", "http://localhost:9090/-/healthy"):
+    with urllib.request.urlopen(url) as response:
+        assert response.status == 200, url
+request = urllib.request.Request(
+    "http://localhost:3004/predict",
+    json.dumps({"headlines": ["Company profits beat forecasts"]}).encode(),
+    {"Content-Type": "application/json"},
+)
+with urllib.request.urlopen(request) as response:
+    prediction = json.load(response)["predictions"][0]
+assert set(prediction) >= {"class", "confidence", "probabilities", "model_version"}
+print("stack healthy", prediction)
+PY
